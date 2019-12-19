@@ -116,27 +116,29 @@ x_test = x_test.astype('float32') / 255
 
 # network parameters
 input_shape = (image_size[0], image_size[1], 1)
-batch_size = 18
+batch_size = 36
 kernel_size = 5
 filters = 16
-latent_dim = 4
-epochs = 3
-strides = 2
+latent_dim = 50
+epochs = 80
+strides = (2, 2)
 
 # VAE model = encoder + decoder
 # build encoder model
 inputs = Input(shape=input_shape, name='encoder_input')
 input_four = Lambda(lambda x:
-                    x[0:480*4-1,
+                    x[:, 0:480*4,
                         :, :])(inputs)
-
+print(inputs)
+print(input_four)
 input_fifth = Lambda(lambda x:
-                     x[480*4:480*5-1,
+                     x[:, 1920:2400,
                          :, :])(inputs)
+print(input_fifth)
 actions = Lambda(lambda x:
-                    x[480*5, 0, 0:1])(inputs)
+                    x[:, 480*5, 0:2, 0])(inputs)
 x = input_four
-for i in range(2):
+for i in range(3):
     x = Conv2D(filters=filters,
                kernel_size=kernel_size,
                activation='relu',
@@ -151,7 +153,13 @@ shape = K.int_shape(x)
 x = Flatten()(x)
 x = Dense(latent_dim, activation='relu')(x)
 z_mean = Dense(latent_dim, name='z_mean')(x)
-z_log_var = Dense(latent_dim, name='z_log_var')(x)
+
+
+def relu_advanced(x):
+    return K.relu(x, alpha=-1.0, max_value=10.0)
+
+
+z_log_var = Dense(latent_dim, activation=relu_advanced, name='z_log_var')(x)
 
 # use reparameterization trick to push the sampling out as input
 # note that "output_shape" isn't necessary with the TensorFlow backend
@@ -166,6 +174,7 @@ plot_model(encoder, to_file='vae_cnn_encoder.png', show_shapes=True)
 first_input = Input(shape=(latent_dim,))
 second_input = Input(shape=(2,))
 merged = concatenate([first_input, second_input])
+print(merged)
 merged_model = Model([first_input, second_input], merged, name='merged_model')
 
 # build decoder model
@@ -173,7 +182,7 @@ latent_inputs = Input(shape=(latent_dim + 2,), name='z_sampling')
 x = Dense(shape[1] // 4 * shape[2] * shape[3], activation='relu')(latent_inputs)
 x = Reshape((shape[1] // 4, shape[2], shape[3]))(x)
 
-for i in range(2):
+for i in range(3):
     filters //= 2
     x = Conv2DTranspose(filters=filters,
                         kernel_size=kernel_size,
@@ -193,7 +202,9 @@ decoder.summary()
 plot_model(decoder, to_file='vae_cnn_decoder.png', show_shapes=True)
 
 # instantiate VAE model
-outputs = decoder(merged_model([encoder(inputs)[2], encoder(inputs[3])]))
+print(encoder(inputs)[2])
+print(encoder(inputs)[3])
+outputs = decoder(merged_model([encoder(inputs)[2], encoder(inputs)[3]]))
 vae = Model(inputs, outputs, name='vae')
 
 if __name__ == '__main__':
@@ -239,15 +250,24 @@ if __name__ == '__main__':
                              write_images=True,  # 是否可视化参数
                              embeddings_freq=0,
                              embeddings_layer_names=None,
-                             embeddings_metadata=None)
-
+                             embeddings_metadata=None,
+                             update_freq=100
+                             )
+    from keras.callbacks import ModelCheckpoint
+    cpCallBack = ModelCheckpoint("weights.hdf5",
+                                 monitor='val_loss',
+                                 verbose=1,
+                                 save_best_only=False,
+                                 save_weights_only=False,
+                                 mode='min',
+                                 period=1)
     if args.weights:
         vae.load_weights(args.weights)
         vae.fit(x_train,
                 epochs=epochs,
                 batch_size=batch_size,
                 validation_data=(x_test, None),
-                callbacks=[tbCallBack])
+                callbacks=[tbCallBack, cpCallBack])
         vae.save_weights('vae_cnn_duckie.h5')
     else:
         # train the autoencoder
@@ -255,7 +275,7 @@ if __name__ == '__main__':
                 epochs=epochs,
                 batch_size=batch_size,
                 validation_data=(x_test, None),
-                callbacks=[tbCallBack])
+                callbacks=[tbCallBack, cpCallBack])
         vae.save_weights('vae_cnn_duckie.h5')
 
     # plot_results(models, data, batch_size=batch_size, model_name="vae_cnn")
@@ -272,5 +292,5 @@ if __name__ == '__main__':
     ax.imshow(np.reshape(vae.predict(x_train, batch_size=batch_size)[0], [480, 640]),
               cmap=plt.cm.gray)
     plt.show()
-    figure = plt.figure()
-    plt.imshow(figure, cmap='Greys_r')
+    # figure = plt.figure()
+    # plt.imshow(figure, cmap='Greys_r')
