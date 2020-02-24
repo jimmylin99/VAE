@@ -152,14 +152,16 @@ shape = K.int_shape(x)
 # generate latent vector Q(z|X)
 x = Flatten()(x)
 x = Dense(latent_dim, activation='relu')(x)
-z_mean = Dense(latent_dim, name='z_mean')(x)
 
 
-def relu_advanced(x):
-    return K.relu(x, alpha=-1.0, max_value=10.0)
+def clip_activation(x_min=-20.0, x_max=10.0):
+    def wrapped_activation(x):
+        return K.clip(x, x_min, x_max)
+    return wrapped_activation
 
 
-z_log_var = Dense(latent_dim, activation=relu_advanced, name='z_log_var')(x)
+z_mean = Dense(latent_dim, activation=clip_activation(-10000.0, 10000.0), name='z_mean')(x)
+z_log_var = Dense(latent_dim, activation=clip_activation(-20.0, 10.0), name='z_log_var')(x)
 
 # use reparameterization trick to push the sampling out as input
 # note that "output_shape" isn't necessary with the TensorFlow backend
@@ -251,32 +253,44 @@ if __name__ == '__main__':
                              embeddings_freq=0,
                              embeddings_layer_names=None,
                              embeddings_metadata=None,
-                             update_freq=100
+                             # update_freq=100
                              )
     from keras.callbacks import ModelCheckpoint
     cpCallBack = ModelCheckpoint("weights.hdf5",
                                  monitor='val_loss',
-                                 verbose=1,
-                                 save_best_only=False,
+                                 verbose=0,
+                                 save_best_only=True,
                                  save_weights_only=False,
                                  mode='min',
                                  period=1)
+    from keras.callbacks import EarlyStopping
+    esCallBack = EarlyStopping(monitor='val_loss',
+                               min_delta=0,
+                               patience=6,
+                               verbose=0,
+                               mode='auto',
+                               baseline=None,
+                               restore_best_weights=False)
+    from keras.models import load_model
     if args.weights:
-        vae.load_weights(args.weights)
+        # vae.load_weights(args.weights)
+        vae = load_model('vae_cnn_model.h5')
         vae.fit(x_train,
                 epochs=epochs,
                 batch_size=batch_size,
                 validation_data=(x_test, None),
-                callbacks=[tbCallBack, cpCallBack])
+                callbacks=[tbCallBack, cpCallBack, esCallBack])
         vae.save_weights('vae_cnn_duckie.h5')
+        vae.save('vae_cnn_model.h5')
     else:
         # train the autoencoder
         vae.fit(x_train,
                 epochs=epochs,
                 batch_size=batch_size,
                 validation_data=(x_test, None),
-                callbacks=[tbCallBack, cpCallBack])
+                callbacks=[tbCallBack, cpCallBack, esCallBack])
         vae.save_weights('vae_cnn_duckie.h5')
+        vae.save('vae_cnn_model.h5')
 
     # plot_results(models, data, batch_size=batch_size, model_name="vae_cnn")
     outputImg = vae.predict(x_test, batch_size=batch_size)
