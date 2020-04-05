@@ -1,37 +1,58 @@
+# coding=utf-8
+__version__ = 'v3'
+
 from tensorflow.keras.layers import Dense, Input, concatenate
 from tensorflow.keras.layers import Conv2D, Flatten, Lambda
 from tensorflow.keras.layers import Reshape, Conv2DTranspose
 from tensorflow.keras.models import Model
-from tensorflow.keras.losses import mse, binary_crossentropy
+from tensorflow.keras.losses import MeanSquaredError, BinaryCrossentropy
 from tensorflow.keras.utils import plot_model
 from tensorflow.keras import backend as K
+from tensorflow.keras.callbacks import TensorBoard, ModelCheckpoint, EarlyStopping, LambdaCallback
+import datetime
 import tensorflow as tf
 import math
 import numpy as np
 import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import argparse
 import os
 
+"""
+Description:
+    Train model learning Duckietown environment, using VAE-like model.
+LIN
+2020/04/02
+"""
+
+# for the sake of running on hpc, which does not have display device
+matplotlib.use('Agg')
 
 parser = argparse.ArgumentParser()
-help_ = "Load h5 model trained weights"
-parser.add_argument("-w", "--weights", help=help_)
-help_ = "Use mse loss instead of binary cross entropy (default)"
-parser.add_argument("-m", "--mse", help=help_, action='store_true')
-parser.add_argument("-e", "--epoch", help="epoch", default=2, type=int)
+parser.add_argument('-w', '--weights', help='Load tf model trained weights')
+parser.add_argument('-e', '--epoch', help='epoch', default=2, type=int)
 args = parser.parse_args()
 
-# reparameterization trick
-# instead of sampling from Q(z|X), sample eps = N(0,I)
-# then z = z_mean + sqrt(var)*eps
+# CONSTANT
+TRAIN_VAL_SPLIT_CONSTANT = 0.8
+# network parameters
+# for distributed training, the batch_size (globally) will be divided into N parts for N GPUs.
+# e.g. suppose batch for each GPU is 128, then batch_size = 512 for 4 GPUs, = 1024 for 8 GPUs.
+# notice that larger batch often means more epochs to train
+batch_size = 128
+latent_dim = 20
+epochs = args.epoch
+loss_weight = {'image_loss': 1.0,
+               'reward_loss': 1.0,
+               'done_loss': 1.0,
+               'latent_loss': 1.0}
+
+
 def sampling(args):
-    """Reparameterization trick by sampling fr an isotropic unit Gaussian.
-    # Arguments
-        args (tensor): mean and log of variance of Q(z|X)
-    # Returns
-        z (tensor): sampled latent vector
+    """
+    Re-parametrization trick by sampling fr an isotropic unit Gaussian.
+    :param args: (tensor) mean and log of variance of Q(z|X)
+    :return: z (tensor): sampled latent vector
     """
     z_mean, z_log_var = args
     batch = K.shape(z_mean)[0]
@@ -41,47 +62,79 @@ def sampling(args):
     return z_mean + K.exp(0.5 * z_log_var) * epsilon
 
 
-# DUCKIETOWN dataset
+# custom activation function should use Keras backend (K), so that features like auto gradient could work
+def clip_activation(x, x_min, x_max):
+    return K.clip(x, x_min, x_max)
+
+
+# custom loss function
+def custom_loss(y_true, y_pred):
+    # notice that MeanSquaredError is different from mse, due to their inconsistent usage of K.mean
+    # class MeanSquaredError, BinaryCrossentropy: their __call__ method will return a scalar
+    # which coincides with the return type of custom_loss function, i.e. scalar
+    # to be more precise: (tensor) shape=()
+    image_loss = MeanSquaredError()(y_true=input_fifth, y_pred=predicted_img)  # scalar
+    reward_loss = MeanSquaredError()(y_true=reward, y_pred=predicted_reward)  # scalar
+    done_loss = BinaryCrossentropy()(y_true=done, y_pred=predicted_done)  # scalar
+    # notice that latent_loss is related to latent_dim
+    # here we divided it by latent_dim
+    latent_loss = 1 - K.square(z_mean) - K.exp(z_log_var) + z_log_var  # (?, latent_dim)
+    latent_loss = K.sum(latent_loss, axis=-1)  # sum along the last axis --> (?,)
+    latent_loss *= -0.5
+    # make latent_loss irrelevant to latent_dim, where the latter one may vary as a hyper-parameter
+    latent_loss /= latent_dim
+    latent_loss = K.mean(latent_loss)  # take mean over batch --> scalar
+
+    overall_loss = \
+        loss_weight['image_loss'] * image_loss + \
+        loss_weight['reward_loss'] * reward_loss + \
+        loss_weight['done_loss'] * done_loss + \
+        loss_weight['latent_loss'] * latent_loss
+    return overall_loss
+
+
+# load DUCKIETOWN data set
 dataset_file = np.load('dataset_vae.npz')
-dataset = dataset_file["arr_0"]
+data_set = dataset_file["arr_0"]
+# data pre-processing
+# the following operation maps image value to [0, 1], without affecting value of
+# other parameters, i.e. actions, reward, etc.
+# notice that type of all values is the same, i.e. 'float32'
+image_size = data_set.shape[1:]
+data_set = data_set.astype('float32') / 255
+data_set[:, :image_size[0] - 1, :, :] *= 255
+print(data_set[10, :, :, :])
+input('Press ENTER to continue...')
 
-np.random.shuffle(dataset)
-x_train, x_test = np.split(dataset, [math.floor(0.8 * dataset.shape[0])])
-print(x_train.shape)
-image_size = [x_train.shape[1], x_train.shape[2], x_train.shape[3]]
-x_train = np.reshape(x_train, [-1, image_size[0], image_size[1], image_size[2]])
-x_test = np.reshape(x_test, [-1, image_size[0], image_size[1], image_size[2]])
-x_train = x_train.astype('float32') / 255
-x_test = x_test.astype('float32') / 255
-y_train = x_train[:, :image_size[0] - 1, :, image_size[2] - 1]
-y_test = x_test[:, :image_size[0] - 1, :, image_size[2] - 1]
-
-# network parameters
-input_shape = (image_size[0], image_size[1], image_size[2])
-batch_size = 128
-latent_dim = 15
-epochs = args.epoch
+# shuffle the data set
+np.random.shuffle(data_set)
+# split data set into training and validation sets
+# notice that there is no definition on y_train or y_val
+x_train, x_val = np.split(data_set, [math.floor(TRAIN_VAL_SPLIT_CONSTANT * data_set.shape[0])])
+print('x_train''s shape is: ' + str(x_train.shape))
 
 # VAE model = encoder + decoder
-# build encoder model
+# [input_four + action] --> [predicted_{img + reward + done}]
+# categorize input
+input_shape = (image_size[0], image_size[1], image_size[2])
 inputs = Input(shape=input_shape, name='encoder_input')
 input_four = Lambda(lambda x:
                     x[:, :image_size[0] - 1, :, :image_size[2] - 1])(inputs)
 input_fifth = Lambda(lambda x:
                      x[:, :image_size[0] - 1, :, image_size[2] - 1])(inputs)
-actions = Lambda(lambda x:
-                    x[:, image_size[0] - 1, 0:2, 0])(inputs)
+# speed will not be counted in this version
+action = Lambda(lambda x:  # action is no longer two-value but a scalar, representing steering
+                    x[:, image_size[0] - 1, 5:6, 0])(inputs)
 reward = Lambda(lambda x:
-                  x[:, image_size[0] - 1, 2:3, 0])(inputs)
-done_int = Lambda(lambda x:
-                  x[:, image_size[0] - 1, 3:4, 0])(inputs)
-speed = Lambda(lambda x:
-                  x[:, image_size[0] - 1, 4:5, 0])(inputs)
+                  x[:, image_size[0] - 1, 6:7, 0])(inputs)
+done = Lambda(lambda x:  # done is a binary value, i.e. either 0.0 or 1.0
+                  x[:, image_size[0] - 1, 7:8, 0])(inputs)
 """
     Conv2D layer: Conv2D(filter_num, filter_size, activation, strides, padding)
     padding = 'valid': H = ceil((H1 - filter_Height + 1) / stride)
     padding = 'same':  H = ceil(H1 / stride)
 """
+# build encoder
 x = input_four  # (?, 120, 160, 4)
 x = Conv2D(12, (5, 5), activation='relu', strides=(2, 2), padding='valid')(x)  # (?, 58, 78, 12)
 x = Conv2D(24, (5, 5), activation='relu', strides=(2, 2), padding='valid')(x)  # (?, 27, 37, 24)
@@ -93,25 +146,23 @@ x = Conv2D(64, (3, 3), activation='relu', strides=(1, 1), padding='valid')(x)  #
 # shape info needed to build decoder model
 shape = K.int_shape(x)
 
+# FC layer
 x = Flatten()(x)
 x = Dense(1000, activation='relu')(x)  # (?, 1000)
 x = Dense(100, activation='relu')(x)  # (?, 100)
 
-
-def clip_activation(x_min, x_max):
-    def wrapped_activation(x):
-        return K.clip(x, x_min, x_max)
-    return wrapped_activation
-
-
+# activation function before sampling process is special
+# 'linear' for z_mean, clip at least from above in z_log_var in avoidance with NaN
 z_mean = Dense(latent_dim, activation='linear', name='z_mean')(x)
 z_log_var = Dense(latent_dim, activation=clip_activation(-100.0, 10.0), name='z_log_var')(x)
 
 z = Lambda(sampling, output_shape=(latent_dim,), name='z')([z_mean, z_log_var])
 
-merged = concatenate([z, actions, speed])
+# merge classical latent space z along with action
+merged = concatenate([z, action])
 
 # build decoder model
+# 1. generate predicted_img
 x = Dense(100, activation='relu')(merged)
 x = Dense(1000, activation='relu')(x)
 x = Dense(shape[1] * shape[2] * shape[3], activation='relu')(x)
@@ -126,61 +177,50 @@ x = Conv2DTranspose(48, (3, 3), activation='relu', strides=(1, 1), padding='vali
 x = Conv2DTranspose(36, (5, 5), activation='relu', strides=(1, 1), padding='valid')(x)  # (?, 12, 17, 36)
 x = Conv2DTranspose(24, (5, 5), activation='relu', strides=(2, 2), padding='valid')(x)  # (?, 27, 37, 24)
 x = Conv2DTranspose(12, (6, 6), activation='relu', strides=(2, 2), padding='valid')(x)  # (?, 58, 78, 12)
+# activation for last step in each part of decoder is special
+# image will be clipped in [0, 1] as did for data set
+# reward will use 'linear'
+# done will use 'sigmoid'
 predicted_img = Conv2DTranspose(1, (6, 6),
                                 activation=clip_activation(x_min=0.0, x_max=1.0),
                                 strides=(2, 2),
                                 padding='valid')(x)   # (?, 120, 160, 1)
 # predicted_img = Flatten()(predicted_img)  # (?, 120 * 160 * 1) ??necessary?
 
+# 2. generate predicted_reward
 x = Dense(100, activation='relu')(merged)
 x = Dense(1000, activation='relu')(x)
 x = Dense(1000, activation='relu')(x)
 x = Dense(100, activation='relu')(x)
-predicted_speed = Dense(1, activation='relu')(x)  # (?, 1)
+predicted_reward = Dense(1, activation='linear')(x)  # (?, 1)
 
-outputs = [predicted_img, predicted_speed]
+# 3. generate predicted_done
+x = Dense(100, activation='relu')(merged)
+x = Dense(1000, activation='relu')(x)
+x = Dense(1000, activation='relu')(x)
+x = Dense(100, activation='relu')(x)
+predicted_done = Dense(1, activation='sigmoid')(x)  # (?, 1)
 
-# instantiate VAE model
-# outputs = decoder(merged_model(encoder(inputs)[2:]))
-vae = Model(inputs, outputs, name='vae')
+outputs = [predicted_img, predicted_reward, predicted_done]
 
+# create and compile VAE model which can be run in a distributional way across multiple GPUs.
+mirrored_strategy = tf.distribute.MirroredStrategy()
+with mirrored_strategy.scope():
+    vae = Model(inputs, outputs, name='vae')
+    # use custom loss
+    vae.compile(optimizer='adam', loss=custom_loss)
 
-# models = (encoder, decoder)
-# data = (x_test, y_test) # ???
-
-# VAE loss = mse_loss or xent_loss + kl_loss
-# if args.mse:
-#     reconstruction_loss = mse(K.flatten(input_fifth),
-#                           K.flatten(outputs))
-# else:
-#     reconstruction_loss = binary_crossentropy(K.flatten(input_fifth),
-#                                              K.flatten(outputs))
-#
-# reconstruction_loss *= image_size[0] * image_size[1] * image_size[2] # ???
-# kl_loss = 1 + z_log_var - K.square(z_mean) - K.exp(z_log_var)
-# kl_loss = K.sum(kl_loss, axis=-1)
-# kl_loss *= -0.5
-# vae_loss = K.mean(reconstruction_loss + kl_loss)
-# vae.add_loss(vae_loss)
-
-
-def custom_loss(y_true, y_pred):
-    pass
-
-
-vae.compile(optimizer='adam', loss=custom_loss)
 vae.summary()
 plot_model(vae, to_file='vae_cnn.png', show_shapes=True)
+tf.keras.callbacks.Callback()
+# logs registry
+log_dir = 'logs/'
+currentTimeStr = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+scalar_log_dir = os.path.join(log_dir, 'scalars/', currentTimeStr)
+loss_file_writer = tf.summary.create_file_writer(scalar_log_dir + "/loss")
+loss_file_writer.set_as_default()
 
-from tensorflow.keras.callbacks import TensorBoard
-import datetime
-currentTimeStr = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-log_dir = os.path.join(
-    "logs",
-    "fit",
-    currentTimeStr,
-)
-weight_path = 'model/weight.ckpt'
+fit_log_dir = os.path.join(log_dir, 'fit/', currentTimeStr)
 weight_dir = os.path.join(
     "weight",
     currentTimeStr,
@@ -201,7 +241,7 @@ tbCallBack = TensorBoard(log_dir=log_dir,  # log 目录
                          embeddings_metadata=None,
                          # update_freq=100
                          )
-from tensorflow.keras.callbacks import ModelCheckpoint
+
 cpCallBack = ModelCheckpoint(weight_dir,
                              monitor='val_loss',
                              verbose=0,
@@ -209,7 +249,7 @@ cpCallBack = ModelCheckpoint(weight_dir,
                              save_weights_only=True,
                              mode='min',
                              save_freq='epoch')
-from tensorflow.keras.callbacks import EarlyStopping
+
 esCallBack = EarlyStopping(monitor='val_loss',
                            min_delta=0,
                            patience=10,
