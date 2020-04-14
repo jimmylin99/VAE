@@ -5,12 +5,10 @@ from tensorflow.keras.models import load_model
 import math
 import os
 
-image_size = (121, 160, 5)
-
 # vae = VAE()
 # vae.load_weights('tmp_weight/weight200')
 
-vae = load_model('v4-model/20200413-202309/model1')
+vae = load_model('v4-model/20200414-193047/best_model66')
 
 # load DUCKIETOWN data set
 print('loading data...')
@@ -37,18 +35,24 @@ data_set = data_set.astype('float32') / 255
 print('divide ops done.')
 data_set[:, image_size[0] - 1, :, :] *= 255
 print('partial mul ops done.')
+print('shrinking data set size...')
+data_set = data_set[:200]
+sample_num = data_set.shape[0]
+print('sample num: {}'.format(sample_num))
 # print(data_set[10, :, :, :])
 # input('Press ENTER to continue...')
 
-ret = vae.predict(data_set[:15])
+row = 5
+col = 8
+ret = vae.predict(data_set[:row*col])
 print(ret)
 predicted_img = ret[0]
 
 fig = plt.figure()
-for i in range(0, 3):
-    for j in range(0, 5):
-        index = i*5+j
-        ax = fig.add_subplot(3, 5, index+1)
+for i in range(0, row):
+    for j in range(0, col):
+        index = i * row + j
+        ax = fig.add_subplot(row, col, index + 1)
         ax.axis('off')
         ax.imshow(predicted_img[index, :image_size[0] - 1, :, 0], cmap=plt.cm.gray)
 plt.subplots_adjust(hspace=0.1)
@@ -57,20 +61,21 @@ plt.savefig('sampleVAEimg_predicted.svg', format='svg', dpi=1200)
 ret = vae.predict(data_set)
 predicted_reward = ret[1]
 
-for i in range(300):
+print('predicting...')
+for i in range(sample_num):
     print(predicted_reward[i, 0], data_set[i, image_size[0] - 1, 6, 0])
 
-x = range(300)
+x = range(sample_num)
 plt.figure()
 plt.plot(x, predicted_reward[:, 0], 'r--', label='predicted')
 plt.plot(x, data_set[:, image_size[0] - 1, 6, 0], 'b--', label='ground_truth')
 plt.ylabel('reward')
 plt.legend()
-plt.show()
+plt.savefig('sample_reward_preview.svg', format='svg', dpi=1200)
 
 filtered_predict_reward = []
 filtered_ground_truth_reward = []
-for i in range(300):
+for i in range(sample_num):
     if predicted_reward[i, 0] < -20 or data_set[i, image_size[0] - 1, 6, 0] < -20:
         continue
     filtered_predict_reward.append(predicted_reward[i, 0])
@@ -86,4 +91,6 @@ plt.plot(x, filtered_predict_reward, 'ro-', label='predicted')
 plt.plot(x, filtered_ground_truth_reward, 'bo-', label='ground_truth')
 plt.ylabel('reward')
 plt.legend()
+plt.savefig('sample_filtered_reward_preview.svg', format='svg', dpi=1200)
+
 plt.show()

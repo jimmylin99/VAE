@@ -9,6 +9,9 @@ import datetime
 import math
 import numpy as np
 import matplotlib
+# for the sake of running on hpc, which does not have display device
+# also, it has to be used before importing matplotlib.pyplot
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import argparse
 import os
@@ -17,16 +20,14 @@ import os
 Description:
     Train model simulating Duckietown environment, using VAE-like model.
 LIN
-2020/04/13
+2020/04/14
 """
-
-# for the sake of running on hpc, which does not have display device
-matplotlib.use('Agg')
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-w', '--weights', help='Load trained weights')
 parser.add_argument('-m', '--model', help='Load tf model')
 parser.add_argument('-e', '--epoch', help='epoch', default=2, type=int)
+parser.add_argument('-b', '--batch', help='batch size', default=128, type=int)
 args = parser.parse_args()
 
 # logs registry
@@ -43,7 +44,7 @@ TRAIN_VAL_SPLIT_CONSTANT = 0.8
 # for distributed training, the batch_size (globally) will be divided into N parts for N GPUs.
 # e.g. suppose batch for each GPU is 128, then batch_size = 512 for 4 GPUs, = 1024 for 8 GPUs.
 # notice that larger batch often means more epochs to train
-batch_size = 128
+batch_size = args.batch
 latent_dim = 20
 epochs = args.epoch
 loss_weight = {'image_loss': 10.0,
@@ -180,6 +181,10 @@ print('model declared.')
 ret1 = None
 ret2 = None
 best_test_loss = math.inf
+print('hyper-parameter for weight: img:{}, reward:{}, kl:{}, done:{}'.format(loss_weight['image_loss'],
+                                                                             loss_weight['reward_loss'],
+                                                                             loss_weight['latent_loss'],
+                                                                             loss_weight['done_loss']))
 print('start training...')
 for epoch in range(epochs):
     train_loss.reset_states()
@@ -256,30 +261,34 @@ for epoch in range(epochs):
     tf.summary.scalar(name='test/weighted/done_loss',
                       data=loss_weight['done_loss'] * test_done_loss.result(), step=epoch)
 
-# tf.summary.scalar(name='loss_weight/kl', data=loss_weight['latent_loss'], step=1)
-# tf.summary.scalar(name='loss_weight/done', data=loss_weight['done_loss'], step=1)
-# tf.summary.scalar(name='loss_weight/reconstruction', data=loss_weight['image_loss'], step=1)
-# tf.summary.scalar(name='loss_weight/reward', data=loss_weight['reward_loss'], step=1)
+tf.summary.scalar(name='loss_weight/kl', data=loss_weight['latent_loss'], step=0)
+tf.summary.scalar(name='loss_weight/done', data=loss_weight['done_loss'], step=0)
+tf.summary.scalar(name='loss_weight/reconstruction', data=loss_weight['image_loss'], step=0)
+tf.summary.scalar(name='loss_weight/reward', data=loss_weight['reward_loss'], step=0)
 
 # tf.summary.trace_export(name='trace_graph', step=0)
 
-fig = plt.figure()
-for i in range(0, 3):
-    for j in range(0, 5):
-        ax = fig.add_subplot(3, 5, i*5+j+1)
-        ax.axis('off')
-        ax.imshow(ret1[i, :image_size[0] - 1, :, 0], cmap=plt.cm.gray)
-plt.subplots_adjust(hspace=0.1)
-plt.savefig('sampleVAEimg_train.svg', format='svg', dpi=1200)
-
-fig = plt.figure()
-for i in range(0, 3):
-    for j in range(0, 5):
-        ax = fig.add_subplot(3, 5, i*5+j+1)
-        ax.axis('off')
-        ax.imshow(ret2[i, :image_size[0] - 1, :, 0], cmap=plt.cm.gray)
-plt.subplots_adjust(hspace=0.1)
-plt.savefig('sampleVAEimg_test.svg', format='svg', dpi=1200)
+# print('show sample img...')
+# fig = plt.figure()
+# for i in range(0, 3):
+#     for j in range(0, 5):
+#         index = i*5+j
+#         ax = fig.add_subplot(3, 5, index + 1)
+#         ax.axis('off')
+#         ax.imshow(ret1[index, :image_size[0] - 1, :, 0], cmap=plt.cm.gray)
+# plt.subplots_adjust(hspace=0.1)
+# plt.savefig('sampleVAEimg_train.svg', format='svg', dpi=1200)
+#
+# fig = plt.figure()
+# for i in range(0, 3):
+#     for j in range(0, 5):
+#         index = i*5+j
+#         ax = fig.add_subplot(3, 5, index + 1)
+#         ax.axis('off')
+#         ax.imshow(ret2[index, :image_size[0] - 1, :, 0], cmap=plt.cm.gray)
+# plt.subplots_adjust(hspace=0.1)
+# plt.savefig('sampleVAEimg_test.svg', format='svg', dpi=1200)
+# print('img plot done.')
 
 # new_model = VAE()
 # new_model.load_weights(os.path.join('v4-model', currentTimeStr, 'best_weight1'))
@@ -288,3 +297,5 @@ plt.savefig('sampleVAEimg_test.svg', format='svg', dpi=1200)
 # new_predictions = new_model.predict(x_val[:1])
 # print(new_predictions)
 # np.testing.assert_allclose(predictions, new_predictions, rtol=1e-6, atol=1e-6)
+
+print('finished.')
