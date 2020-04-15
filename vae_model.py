@@ -168,7 +168,7 @@ class VAE(Model):
         x = self.dr3(x)
         x = self.dr4(x)
         self.predicted_reward_var = self.dreward(x)
-        # self.predicted_reward_var = K.clip(self.predicted_reward_var, -20.0, 20.0)
+        self.predicted_reward_var = K.clip(self.predicted_reward_var, -20.0, 20.0)
 
         x = self.dd1(merged)
         x = self.dd2(x)

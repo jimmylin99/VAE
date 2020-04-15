@@ -8,7 +8,7 @@ import os
 # vae = VAE()
 # vae.load_weights('tmp_weight/weight200')
 
-vae = load_model('v4-model/20200414-193047/best_model66')
+vae = load_model('v4-model/20200415-213615/best_model120')
 
 # load DUCKIETOWN data set
 print('loading data...')
@@ -35,15 +35,19 @@ data_set = data_set.astype('float32') / 255
 print('divide ops done.')
 data_set[:, image_size[0] - 1, :, :] *= 255
 print('partial mul ops done.')
+for i in range(data_set.shape[0]):
+    if data_set[i, image_size[0] - 1, 6, 0] < -20:
+        data_set[i, image_size[0] - 1, 6, :] = -20
+print('clip reward done.')
 print('shrinking data set size...')
-data_set = data_set[:200]
+data_set = data_set[:300]
 sample_num = data_set.shape[0]
 print('sample num: {}'.format(sample_num))
 # print(data_set[10, :, :, :])
 # input('Press ENTER to continue...')
 
-row = 5
-col = 8
+row = 4
+col = 5
 ret = vae.predict(data_set[:row*col])
 print(ret)
 predicted_img = ret[0]
@@ -57,6 +61,16 @@ for i in range(0, row):
         ax.imshow(predicted_img[index, :image_size[0] - 1, :, 0], cmap=plt.cm.gray)
 plt.subplots_adjust(hspace=0.1)
 plt.savefig('sampleVAEimg_predicted.svg', format='svg', dpi=1200)
+
+fig = plt.figure()
+for i in range(0, row):
+    for j in range(0, col):
+        index = i * row + j
+        ax = fig.add_subplot(row, col, index + 1)
+        ax.axis('off')
+        ax.imshow(data_set[index, :image_size[0] - 1, :, 0], cmap=plt.cm.gray)
+plt.subplots_adjust(hspace=0.1)
+plt.savefig('sampleVAEimg_original.svg', format='svg', dpi=1200)
 
 ret = vae.predict(data_set)
 predicted_reward = ret[1]

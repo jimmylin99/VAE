@@ -48,7 +48,7 @@ batch_size = args.batch
 latent_dim = 20
 epochs = args.epoch
 loss_weight = {'image_loss': 10.0,
-               'reward_loss': 2e-5,
+               'reward_loss': 0.01,
                'done_loss': 10.0,
                'latent_loss': 5e-3}
 
@@ -68,7 +68,7 @@ test_done_loss = tf.keras.metrics.Mean(name='test_done_loss')
 
 
 @tf.function
-def train_step(inputs):
+def train_step_branch(inputs):
     with tf.GradientTape(persistent=False) as tape:
         predicted_img, predicted_reward, predicted_done = vae(inputs, training=True)
         _reconstruction_loss = MeanSquaredError()(predicted_img, vae.input_fifth_var)
@@ -80,13 +80,75 @@ def train_step(inputs):
             axis=-1))
         # _done_loss = BinaryCrossentropy()(predicted_done, vae.done_var)
 
-        total_loss = loss_weight['image_loss'] * _reconstruction_loss + \
-                     loss_weight['latent_loss'] * _kl_loss + \
-                     loss_weight['reward_loss'] * _reward_loss \
-                     # + loss_weight['done_loss'] * _done_loss
+        # bough_loss = loss_weight['image_loss'] * _reconstruction_loss + \
+        #              loss_weight['latent_loss'] * _kl_loss
+        branch_loss = _reward_loss
+        # total_loss = loss_weight['image_loss'] * _reconstruction_loss + \
+        #              loss_weight['latent_loss'] * _kl_loss + \
+        #              loss_weight['reward_loss'] * _reward_loss \
+        #              # + loss_weight['done_loss'] * _done_loss
 
-    gradients = tape.gradient(total_loss, vae.trainable_variables)
+    reward_trainable_vairables = vae.dr1.trainable_variables + vae.dr2.trainable_variables + \
+                                 vae.dr3.trainable_variables + vae.dr4.trainable_variables + \
+                                 vae.dreward.trainable_variables
+    gradients_reward = tape.gradient(branch_loss, reward_trainable_vairables)
+    optimizer.apply_gradients((zip(gradients_reward, reward_trainable_vairables)))
+
+    train_loss(branch_loss)
+    # train_loss(total_loss)
+    train_reward_loss(_reward_loss)
+    train_reconstruction_loss(_reconstruction_loss)
+    train_kl_loss(_kl_loss)
+
+    # return tape, bough_loss, branch_loss
+
+
+@tf.function
+def train_step_bough(inputs):
+    with tf.GradientTape(persistent=False) as tape:
+        predicted_img, predicted_reward, predicted_done = vae(inputs, training=True)
+        _reconstruction_loss = MeanSquaredError()(predicted_img, vae.input_fifth_var)
+        _reward_loss = MeanSquaredError()(predicted_reward, vae.reward_var)
+        _kl_loss = -0.5 * (K.sum(
+            1 - K.square(vae.z_mean_var)
+            - K.exp(vae.z_log_var_var)
+            + vae.z_log_var_var,
+            axis=-1))
+        # _done_loss = BinaryCrossentropy()(predicted_done, vae.done_var)
+
+        bough_loss = loss_weight['image_loss'] * _reconstruction_loss + \
+                     loss_weight['latent_loss'] * _kl_loss
+        # branch_loss = _reward_loss
+        # total_loss = loss_weight['image_loss'] * _reconstruction_loss + \
+        #              loss_weight['latent_loss'] * _kl_loss + \
+        #              loss_weight['reward_loss'] * _reward_loss \
+        #              # + loss_weight['done_loss'] * _done_loss
+
+    gradients = tape.gradient(bough_loss, vae.trainable_variables)
     optimizer.apply_gradients(zip(gradients, vae.trainable_variables))
+
+    train_loss(bough_loss)
+    # train_loss(total_loss)
+    train_reward_loss(_reward_loss)
+    train_reconstruction_loss(_reconstruction_loss)
+    train_kl_loss(_kl_loss)
+
+
+def train_step(inputs, train_branch=False):
+    if train_branch:
+        train_step_branch(inputs)
+    else:
+        train_step_bough(inputs)
+
+    # if train_branch:
+    #     reward_trainable_vairables = vae.dr1.trainable_variables + vae.dr2.trainable_variables + \
+    #                                  vae.dr3.trainable_variables + vae.dr4.trainable_variables + \
+    #                                  vae.dreward.trainable_variables
+    #     gradients_reward = tape.gradient(branch_loss, reward_trainable_vairables)
+    #     optimizer.apply_gradients((zip(gradients_reward, reward_trainable_vairables)))
+    # else:
+    #     gradients = tape.gradient(bough_loss, vae.trainable_variables)
+    #     optimizer.apply_gradients(zip(gradients, vae.trainable_variables))
 
     # reward_trainable_vairables = vae.dr1.trainable_variables + vae.dr2.trainable_variables + \
     #                              vae.dr3.trainable_variables + vae.dr4.trainable_variables + \
@@ -95,17 +157,21 @@ def train_step(inputs):
     # gradients_reward = tape.gradient(_reward_loss, reward_trainable_vairables)
     # optimizer.apply_gradients((zip(gradients_reward, reward_trainable_vairables)))
 
-    train_loss(total_loss)
-    train_reward_loss(_reward_loss)
-    train_reconstruction_loss(_reconstruction_loss)
-    train_kl_loss(_kl_loss)
+    # if train_branch:
+    #     train_loss(branch_loss)
+    # else:
+    #     train_loss(bough_loss)
+    # # train_loss(total_loss)
+    # train_reward_loss(_reward_loss)
+    # train_reconstruction_loss(_reconstruction_loss)
+    # train_kl_loss(_kl_loss)
     # train_done_loss(_done_loss)
 
-    return predicted_img
+    # return predicted_img
 
 
 @tf.function
-def test_step(inputs):
+def test_step(inputs, train_branch=False):
     predicted_img, predicted_reward, predicted_done = vae(inputs, training=False)
     _reconstruction_loss = MeanSquaredError()(predicted_img, vae.input_fifth_var)
     _reward_loss = MeanSquaredError()(predicted_reward, vae.reward_var)
@@ -115,19 +181,26 @@ def test_step(inputs):
         + vae.z_log_var_var,
         axis=-1))
     # _done_loss = BinaryCrossentropy()(predicted_done, vae.done_var)
-    total_loss = loss_weight['image_loss'] * _reconstruction_loss + \
-                 loss_weight['latent_loss'] * _kl_loss + \
-                 loss_weight['reward_loss'] * _reward_loss
-                 # + \
-                 # loss_weight['done_loss'] * _done_loss
+    # total_loss = loss_weight['image_loss'] * _reconstruction_loss + \
+    #              loss_weight['latent_loss'] * _kl_loss + \
+    #              loss_weight['reward_loss'] * _reward_loss
+    #              # + \
+    #              # loss_weight['done_loss'] * _done_loss
+    bough_loss = loss_weight['image_loss'] * _reconstruction_loss + \
+                 loss_weight['latent_loss'] * _kl_loss
+    branch_loss = _reward_loss
 
-    test_loss(total_loss)
+    if train_branch:
+        test_loss(branch_loss)
+    else:
+        test_loss(bough_loss)
+    # test_loss(total_loss)
     test_reconstruction_loss(_reconstruction_loss)
     test_reward_loss(_reward_loss)
     test_kl_loss(_kl_loss)
     # test_done_loss(_done_loss)
 
-    return predicted_img
+    # return predicted_img
 
 
 # load DUCKIETOWN data set
@@ -155,6 +228,10 @@ data_set = data_set.astype('float32') / 255
 print('divide ops done.')
 data_set[:, image_size[0] - 1, :, :] *= 255
 print('partial mul ops done.')
+for i in range(data_set.shape[0]):
+    if data_set[i, image_size[0] - 1, 6, 0] < -20:
+        data_set[i, image_size[0] - 1, 6, :] = -20
+print('clip reward done.')
 # print(data_set[10, :, :, :])
 # input('Press ENTER to continue...')
 
@@ -164,7 +241,7 @@ x_train, x_val = np.split(data_set, [math.floor(TRAIN_VAL_SPLIT_CONSTANT * data_
 print('x_train''s shape is: ' + str(x_train.shape))
 
 print('shuffling...')
-train_ds = tf.data.Dataset.from_tensor_slices(x_train).shuffle(100000).batch(batch_size)
+train_ds = tf.data.Dataset.from_tensor_slices(x_train).shuffle(200000).batch(batch_size)
 print('shuffle of train ds completed.')
 test_ds = tf.data.Dataset.from_tensor_slices(x_val).batch(batch_size)
 print('shuffle completed.')
@@ -178,15 +255,41 @@ else:
 print('model declared.')
 # vae.summary()
 # plot_model(vae, to_file='vae_cnn.png', show_shapes=True)
-ret1 = None
-ret2 = None
+# ret1 = None
+# ret2 = None
 best_test_loss = math.inf
+last_best_epoch = 0
+best_model_route = None
+train_branch = False
+automatic_switch = True
 print('hyper-parameter for weight: img:{}, reward:{}, kl:{}, done:{}'.format(loss_weight['image_loss'],
                                                                              loss_weight['reward_loss'],
                                                                              loss_weight['latent_loss'],
                                                                              loss_weight['done_loss']))
 print('start training...')
 for epoch in range(epochs):
+    if automatic_switch:
+        # automatic branch switching and early stop
+        if epoch - last_best_epoch > 20:
+            if train_branch:
+                # early stop
+                print('early stop before epoch {}'.format(epoch+1))
+                break
+            else:
+                # switch to train branch
+                train_branch = True
+                last_best_epoch = epoch
+                best_test_loss = math.inf
+    else:
+        # manual switch
+        if epoch < 2:
+            train_branch = False
+        elif train_branch is False:
+            # switch to train branch
+            train_branch = True
+            last_best_epoch = epoch
+            best_test_loss = math.inf
+
     train_loss.reset_states()
     train_reconstruction_loss.reset_states()
     train_reward_loss.reset_states()
@@ -199,13 +302,15 @@ for epoch in range(epochs):
     test_kl_loss.reset_states()
     test_done_loss.reset_states()
 
+    print('start training for epoch {}'.format(epoch+1))
     for batch_inputs in train_ds:
         # print(batch_inputs.shape)
-        ret1 = train_step(batch_inputs)
+        train_step(batch_inputs, train_branch=train_branch)
 
+    print('start validation for epoch {}'.format(epoch+1))
     for batch_inputs in test_ds:
         # print(batch_inputs.shape)
-        ret2 = test_step(batch_inputs)
+        test_step(batch_inputs, train_branch=train_branch)
 
     if epoch == epochs - 1:
         print('save last epoch''s weight...')
@@ -213,11 +318,16 @@ for epoch in range(epochs):
         # print('save model...')
         # vae.save(os.path.join('v4-model', currentTimeStr, 'model{}'.format(epoch+1)), save_format='tf')
 
-    # save best model
+    # update best test loss
     if test_loss.result() < best_test_loss:
-        print('save best model...')
+        last_best_epoch = epoch
         best_test_loss = test_loss.result()
-        vae.save(os.path.join('v4-model', currentTimeStr, 'best_model{}'.format(epoch+1)), save_format='tf')
+        # save best model only when training branch
+        if train_branch:
+            print('save best model...')
+            _route = os.path.join('v4-model', currentTimeStr, 'best_model{}'.format(epoch+1))
+            vae.save(_route, save_format='tf')
+            best_model_route = _route
 
     template = 'Epoch {}, Loss: {}, reconstruction loss: {}, reward loss: {}, kl loss: {}, done loss: {}\n' \
                '---- Test Loss: {}, reconstruction loss: {}, reward loss: {}, kl loss: {}, done loss: {}'
@@ -267,6 +377,58 @@ tf.summary.scalar(name='loss_weight/reconstruction', data=loss_weight['image_los
 tf.summary.scalar(name='loss_weight/reward', data=loss_weight['reward_loss'], step=0)
 
 # tf.summary.trace_export(name='trace_graph', step=0)
+
+# sample_num = 300
+# test_samples = x_val[:sample_num]
+# predicted_test_samples = vae.predict(test_samples)
+# predicted_test_img = predicted_test_samples[0]
+# predicted_test_reward = predicted_test_samples[1]
+#
+# row = 4
+# col = 5
+#
+# fig = plt.figure()
+# for i in range(0, row):
+#     for j in range(0, col):
+#         index = i * row + j
+#         ax = fig.add_subplot(row, col, index + 1)
+#         ax.axis('off')
+#         ax.imshow(predicted_test_img[index, :image_size[0] - 1, :, 0], cmap=plt.cm.gray)
+# plt.subplots_adjust(hspace=0.1)
+# plt.savefig('sampleVAEimg_predicted.svg', format='svg', dpi=1200)
+#
+# fig = plt.figure()
+# for i in range(0, row):
+#     for j in range(0, col):
+#         index = i * row + j
+#         ax = fig.add_subplot(row, col, index + 1)
+#         ax.axis('off')
+#         ax.imshow(x_val[index, :image_size[0] - 1, :, 0], cmap=plt.cm.gray)
+# plt.subplots_adjust(hspace=0.1)
+# plt.savefig('sampleVAEimg_original.svg', format='svg', dpi=1200)
+#
+# filtered_predict_reward = []
+# filtered_ground_truth_reward = []
+# for i in range(sample_num):
+#     if predicted_test_reward[i, 0] < -20 or data_set[i, image_size[0] - 1, 6, 0] < -20:
+#         continue
+#     filtered_predict_reward.append(predicted_test_reward[i, 0])
+#     filtered_ground_truth_reward.append(data_set[i, image_size[0] - 1, 6, 0])
+#
+# Z = zip(filtered_ground_truth_reward, filtered_predict_reward)
+# Z = sorted(Z, reverse=True)
+# filtered_ground_truth_reward, filtered_predict_reward = zip(*Z)
+#
+# x = range(len(filtered_ground_truth_reward))
+# plt.figure()
+# plt.plot(x, filtered_predict_reward, 'ro-', label='predicted')
+# plt.plot(x, filtered_ground_truth_reward, 'bo-', label='ground_truth')
+# plt.ylabel('reward')
+# plt.legend()
+# plt.savefig('sample_filtered_reward_preview.svg', format='svg', dpi=1200)
+#
+# plt.show()
+
 
 # print('show sample img...')
 # fig = plt.figure()
