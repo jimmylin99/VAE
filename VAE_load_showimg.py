@@ -8,7 +8,7 @@ import os
 # vae = VAE()
 # vae.load_weights('tmp_weight/weight200')
 
-vae = load_model('v4-model/20200415-213615/best_model120')
+vae = load_model('v4-model/20200419-155438/best_model215')
 
 # load DUCKIETOWN data set
 print('loading data...')
@@ -36,8 +36,8 @@ print('divide ops done.')
 data_set[:, image_size[0] - 1, :, :] *= 255
 print('partial mul ops done.')
 for i in range(data_set.shape[0]):
-    if data_set[i, image_size[0] - 1, 6, 0] < -20:
-        data_set[i, image_size[0] - 1, 6, :] = -20
+    if data_set[i, image_size[0] - 1, 6, 0] < -10:
+        data_set[i, image_size[0] - 1, 6, :] = -10
 print('clip reward done.')
 print('shrinking data set size...')
 data_set = data_set[:300]

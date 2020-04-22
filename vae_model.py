@@ -3,6 +3,10 @@ from tensorflow.keras.models import Model
 from tensorflow.keras import backend as K
 from tensorflow import shape, exp
 
+"""
+    TODO: activation of reconstruction layer, whether appropriate to use softmax
+"""
+
 
 class Sampling(Layer):
     """Uses (z_mean, z_log_var) to sample z, the vector encoding a digit."""

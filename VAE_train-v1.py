@@ -1,5 +1,5 @@
 # coding=utf-8
-__version__ = 'v0'
+__version__ = 'v1'
 
 from vae_model import VAE
 from tensorflow.keras.losses import MeanSquaredError, BinaryCrossentropy
@@ -19,16 +19,23 @@ import os
 """
 Description:
     Train model simulating Duckietown environment, using VAE-like model.
+    update: use memmap
 LIN
-2020/04/19
+2020/04/22
 """
 
 parser = argparse.ArgumentParser()
+# python VAE_train-v1.py [-h] sampleNum [-w WEIGHTS] [-m MODEL] [-e EPOCH] [-b BATCH]
+# Positional Argument (**Mandatory**)
+parser.add_argument('sampleNum', help='total sample num', type=int)
+# Optional Argument
 parser.add_argument('-w', '--weights', help='Load trained weights')
 parser.add_argument('-m', '--model', help='Load tf model')
 parser.add_argument('-e', '--epoch', help='epoch', default=2, type=int)
 parser.add_argument('-b', '--batch', help='batch size', default=128, type=int)
 args = parser.parse_args()
+sampleNum = args.sampleNum
+data_set_shape = (sampleNum, 121, 160, 5)
 
 # logs registry
 log_dir = 'v4-logs/'
@@ -204,34 +211,35 @@ def test_step(inputs, train_branch=False):
 
 
 # load DUCKIETOWN data set
-print('loading data...')
-dataset_file = np.load('dataset_vae.npz')
-print('data loaded.')
-data_set = dataset_file["arr_0"]
-del dataset_file
-print('taken out data from data set')
+print('loading data using memmap...')
+# dataset_file = np.load('dataset_vae.npz')
+# print('data loaded.')
+# data_set = dataset_file["arr_0"]
+# del dataset_file
+date_set = np.memmap('dataset_vae.bin', dtype='float32', mode='r', shape=data_set_shape)
+print('loaded memmap')
 print('data set shape: ', data_set.shape)
 # shuffle the data set
-print('np shuffling...')
-np.random.shuffle(data_set)
-print('np shuffle completed.')
+# print('np shuffling...')
+# np.random.shuffle(data_set[])
+# print('np shuffle completed.')
 # data_set = data_set[:10000]
 # data pre-processing
 # the following operation maps image value to [0, 1], without affecting value of
 # other parameters, i.e. actions, reward, etc.
 # notice that type of all values is the same, i.e. 'float32'
-image_size = data_set.shape[1:]
+image_size = data_set_shape[1:]
 print(image_size)
 input_shape = (image_size[0], image_size[1], image_size[2])
-print('pre-processing...')
-data_set = data_set.astype('float32') / 255
-print('divide ops done.')
-data_set[:, image_size[0] - 1, :, :] *= 255
-print('partial mul ops done.')
-for i in range(data_set.shape[0]):
-    if data_set[i, image_size[0] - 1, 6, 0] < -10:
-        data_set[i, image_size[0] - 1, 6, :] = -10
-print('clip reward done.')
+# print('pre-processing...')
+# data_set = data_set[:, :, :, :].astype('float32') / 255
+# print('divide ops done.')
+# data_set[:, image_size[0] - 1, :, :] *= 255
+# print('partial mul ops done.')
+# for i in range(data_set.shape[0]):
+#     if data_set[i, image_size[0] - 1, 6, 0] < -10:
+#         data_set[i, image_size[0] - 1, 6, :] = -10
+# print('clip reward done.')
 # print(data_set[10, :, :, :])
 # input('Press ENTER to continue...')
 
@@ -241,7 +249,7 @@ x_train, x_val = np.split(data_set, [math.floor(TRAIN_VAL_SPLIT_CONSTANT * data_
 print('x_train''s shape is: ' + str(x_train.shape))
 
 print('shuffling...')
-train_ds = tf.data.Dataset.from_tensor_slices(x_train).shuffle(200000).batch(batch_size)
+train_ds = tf.data.Dataset.from_tensor_slices(x_train).shuffle(500000).batch(batch_size)
 print('shuffle of train ds completed.')
 test_ds = tf.data.Dataset.from_tensor_slices(x_val).batch(batch_size)
 print('shuffle completed.')

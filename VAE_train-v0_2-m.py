@@ -19,8 +19,10 @@ import os
 """
 Description:
     Train model simulating Duckietown environment, using VAE-like model.
+    update(w.r.t. v0): Use data from gen v3.
+    update: -m suffix means this code is for multi-gpus distributed training
 LIN
-2020/04/19
+2020/04/22
 """
 
 parser = argparse.ArgumentParser()
@@ -205,11 +207,11 @@ def test_step(inputs, train_branch=False):
 
 # load DUCKIETOWN data set
 print('loading data...')
-dataset_file = np.load('dataset_vae.npz')
+data_set = np.load('dataset_vae.npy')
 print('data loaded.')
-data_set = dataset_file["arr_0"]
-del dataset_file
-print('taken out data from data set')
+# data_set = dataset_file["arr_0"]
+# del dataset_file
+# print('taken out data from data set')
 print('data set shape: ', data_set.shape)
 # shuffle the data set
 print('np shuffling...')
@@ -223,15 +225,15 @@ print('np shuffle completed.')
 image_size = data_set.shape[1:]
 print(image_size)
 input_shape = (image_size[0], image_size[1], image_size[2])
-print('pre-processing...')
-data_set = data_set.astype('float32') / 255
-print('divide ops done.')
-data_set[:, image_size[0] - 1, :, :] *= 255
-print('partial mul ops done.')
-for i in range(data_set.shape[0]):
-    if data_set[i, image_size[0] - 1, 6, 0] < -10:
-        data_set[i, image_size[0] - 1, 6, :] = -10
-print('clip reward done.')
+# print('pre-processing...')
+# data_set = data_set.astype('float32') / 255
+# print('divide ops done.')
+# data_set[:, image_size[0] - 1, :, :] *= 255
+# print('partial mul ops done.')
+# for i in range(data_set.shape[0]):
+#     if data_set[i, image_size[0] - 1, 6, 0] < -10:
+#         data_set[i, image_size[0] - 1, 6, :] = -10
+# print('clip reward done.')
 # print(data_set[10, :, :, :])
 # input('Press ENTER to continue...')
 
@@ -241,7 +243,7 @@ x_train, x_val = np.split(data_set, [math.floor(TRAIN_VAL_SPLIT_CONSTANT * data_
 print('x_train''s shape is: ' + str(x_train.shape))
 
 print('shuffling...')
-train_ds = tf.data.Dataset.from_tensor_slices(x_train).shuffle(200000).batch(batch_size)
+train_ds = tf.data.Dataset.from_tensor_slices(x_train).shuffle(400000).batch(batch_size)
 print('shuffle of train ds completed.')
 test_ds = tf.data.Dataset.from_tensor_slices(x_val).batch(batch_size)
 print('shuffle completed.')
@@ -380,89 +382,5 @@ tf.summary.scalar(name='loss_weight/kl', data=loss_weight['latent_loss'], step=0
 tf.summary.scalar(name='loss_weight/done', data=loss_weight['done_loss'], step=0)
 tf.summary.scalar(name='loss_weight/reconstruction', data=loss_weight['image_loss'], step=0)
 tf.summary.scalar(name='loss_weight/reward', data=loss_weight['reward_loss'], step=0)
-
-# tf.summary.trace_export(name='trace_graph', step=0)
-
-# sample_num = 300
-# test_samples = x_val[:sample_num]
-# predicted_test_samples = vae.predict(test_samples)
-# predicted_test_img = predicted_test_samples[0]
-# predicted_test_reward = predicted_test_samples[1]
-#
-# row = 4
-# col = 5
-#
-# fig = plt.figure()
-# for i in range(0, row):
-#     for j in range(0, col):
-#         index = i * row + j
-#         ax = fig.add_subplot(row, col, index + 1)
-#         ax.axis('off')
-#         ax.imshow(predicted_test_img[index, :image_size[0] - 1, :, 0], cmap=plt.cm.gray)
-# plt.subplots_adjust(hspace=0.1)
-# plt.savefig('sampleVAEimg_predicted.svg', format='svg', dpi=1200)
-#
-# fig = plt.figure()
-# for i in range(0, row):
-#     for j in range(0, col):
-#         index = i * row + j
-#         ax = fig.add_subplot(row, col, index + 1)
-#         ax.axis('off')
-#         ax.imshow(x_val[index, :image_size[0] - 1, :, 0], cmap=plt.cm.gray)
-# plt.subplots_adjust(hspace=0.1)
-# plt.savefig('sampleVAEimg_original.svg', format='svg', dpi=1200)
-#
-# filtered_predict_reward = []
-# filtered_ground_truth_reward = []
-# for i in range(sample_num):
-#     if predicted_test_reward[i, 0] < -20 or data_set[i, image_size[0] - 1, 6, 0] < -20:
-#         continue
-#     filtered_predict_reward.append(predicted_test_reward[i, 0])
-#     filtered_ground_truth_reward.append(data_set[i, image_size[0] - 1, 6, 0])
-#
-# Z = zip(filtered_ground_truth_reward, filtered_predict_reward)
-# Z = sorted(Z, reverse=True)
-# filtered_ground_truth_reward, filtered_predict_reward = zip(*Z)
-#
-# x = range(len(filtered_ground_truth_reward))
-# plt.figure()
-# plt.plot(x, filtered_predict_reward, 'ro-', label='predicted')
-# plt.plot(x, filtered_ground_truth_reward, 'bo-', label='ground_truth')
-# plt.ylabel('reward')
-# plt.legend()
-# plt.savefig('sample_filtered_reward_preview.svg', format='svg', dpi=1200)
-#
-# plt.show()
-
-
-# print('show sample img...')
-# fig = plt.figure()
-# for i in range(0, 3):
-#     for j in range(0, 5):
-#         index = i*5+j
-#         ax = fig.add_subplot(3, 5, index + 1)
-#         ax.axis('off')
-#         ax.imshow(ret1[index, :image_size[0] - 1, :, 0], cmap=plt.cm.gray)
-# plt.subplots_adjust(hspace=0.1)
-# plt.savefig('sampleVAEimg_train.svg', format='svg', dpi=1200)
-#
-# fig = plt.figure()
-# for i in range(0, 3):
-#     for j in range(0, 5):
-#         index = i*5+j
-#         ax = fig.add_subplot(3, 5, index + 1)
-#         ax.axis('off')
-#         ax.imshow(ret2[index, :image_size[0] - 1, :, 0], cmap=plt.cm.gray)
-# plt.subplots_adjust(hspace=0.1)
-# plt.savefig('sampleVAEimg_test.svg', format='svg', dpi=1200)
-# print('img plot done.')
-
-# new_model = VAE()
-# new_model.load_weights(os.path.join('v4-model', currentTimeStr, 'best_weight1'))
-# predictions = vae.predict(x_val[:1])
-# print(predictions)
-# new_predictions = new_model.predict(x_val[:1])
-# print(new_predictions)
-# np.testing.assert_allclose(predictions, new_predictions, rtol=1e-6, atol=1e-6)
 
 print('finished.')

@@ -19,8 +19,10 @@ import os
 """
 Description:
     Train model simulating Duckietown environment, using VAE-like model.
+    update(w.r.t. v0): Use data from gen v3.
+    update: arg -s -r added
 LIN
-2020/04/19
+2020/04/22
 """
 
 parser = argparse.ArgumentParser()
@@ -28,6 +30,8 @@ parser.add_argument('-w', '--weights', help='Load trained weights')
 parser.add_argument('-m', '--model', help='Load tf model')
 parser.add_argument('-e', '--epoch', help='epoch', default=2, type=int)
 parser.add_argument('-b', '--batch', help='batch size', default=128, type=int)
+parser.add_argument('-s', '--earlystop', help='early stop tolerance step', default=20, type=int)
+parser.add_argument('-r', '--randomshuffle', help='random shuffle buffer size', default=1000, type=int)
 args = parser.parse_args()
 
 # logs registry
@@ -205,11 +209,11 @@ def test_step(inputs, train_branch=False):
 
 # load DUCKIETOWN data set
 print('loading data...')
-dataset_file = np.load('dataset_vae.npz')
+data_set = np.load('dataset_vae.npy')
 print('data loaded.')
-data_set = dataset_file["arr_0"]
-del dataset_file
-print('taken out data from data set')
+# data_set = dataset_file["arr_0"]
+# del dataset_file
+# print('taken out data from data set')
 print('data set shape: ', data_set.shape)
 # shuffle the data set
 print('np shuffling...')
@@ -223,15 +227,15 @@ print('np shuffle completed.')
 image_size = data_set.shape[1:]
 print(image_size)
 input_shape = (image_size[0], image_size[1], image_size[2])
-print('pre-processing...')
-data_set = data_set.astype('float32') / 255
-print('divide ops done.')
-data_set[:, image_size[0] - 1, :, :] *= 255
-print('partial mul ops done.')
-for i in range(data_set.shape[0]):
-    if data_set[i, image_size[0] - 1, 6, 0] < -10:
-        data_set[i, image_size[0] - 1, 6, :] = -10
-print('clip reward done.')
+# print('pre-processing...')
+# data_set = data_set.astype('float32') / 255
+# print('divide ops done.')
+# data_set[:, image_size[0] - 1, :, :] *= 255
+# print('partial mul ops done.')
+# for i in range(data_set.shape[0]):
+#     if data_set[i, image_size[0] - 1, 6, 0] < -10:
+#         data_set[i, image_size[0] - 1, 6, :] = -10
+# print('clip reward done.')
 # print(data_set[10, :, :, :])
 # input('Press ENTER to continue...')
 
@@ -241,7 +245,7 @@ x_train, x_val = np.split(data_set, [math.floor(TRAIN_VAL_SPLIT_CONSTANT * data_
 print('x_train''s shape is: ' + str(x_train.shape))
 
 print('shuffling...')
-train_ds = tf.data.Dataset.from_tensor_slices(x_train).shuffle(200000).batch(batch_size)
+train_ds = tf.data.Dataset.from_tensor_slices(x_train).shuffle(args.randomshuffle).batch(batch_size)
 print('shuffle of train ds completed.')
 test_ds = tf.data.Dataset.from_tensor_slices(x_val).batch(batch_size)
 print('shuffle completed.')
@@ -270,7 +274,7 @@ print('start training...')
 for epoch in range(epochs):
     if automatic_switch:
         # automatic branch switching and early stop
-        if epoch - last_best_epoch > 20:
+        if epoch - last_best_epoch > args.earlystop:
             if train_branch:
                 # early stop
                 print('early stop before epoch {}'.format(epoch+1))
